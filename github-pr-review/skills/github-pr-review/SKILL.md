@@ -330,8 +330,8 @@ gh auth login
 4. **Consolidate findings** - Script merges results by severity
 5. **Calculate positions** - Use helper commands for accuracy
 6. **Show user consolidated review** - Present findings by severity level
-7. **Get explicit approval** - Use AskUserQuestion with yes/no
-8. **Post the review** - Single-call with appropriate event type
+7. **Get explicit approval** - Use AskUserQuestion with yes/no/pending options
+8. **Post the review** - Single-call with appropriate event type, OR create as pending if user chose "Post as pending" (skip the events API call)
 
 ### Manual Workflow (v1.x) - For Quick/Focused Reviews
 
@@ -339,9 +339,9 @@ gh auth login
 2. **Get PR diff** - Fetch diff to calculate correct positions
 3. **Draft the review** - Analyze PR and prepare all comments with valid positions
 4. **Validate all parameters** - Ensure no null/empty values
-5. **Show user exactly what will be posted** - Use AskUserQuestion with yes/no
+5. **Show user exactly what will be posted** - Use AskUserQuestion with yes/no/pending options
 6. **Get explicit approval** - Wait for user confirmation
-7. **Post the review** - Only after approval
+7. **Post the review** - Only after approval, OR create as pending if user chose "Post as pending"
 
 ### Approval Pattern
 
@@ -356,9 +356,12 @@ Before posting ANY review, use AskUserQuestion to show:
 Question: "Ready to post this review?"
 Header: "PR Review"
 Options:
-  - Yes, post it: Posts the review as shown
-  - No, let me revise: Allows refinement
+  - Yes, post it: Posts the review as shown above with {EVENT_TYPE} event type
+  - Post as pending (no event): Creates the review comments but does NOT submit/finalize the review — comments stay as pending draft
+  - No, let me revise: I'll adjust the review based on your feedback
 ```
+
+**Behavior for "Post as pending":** When the user selects this option, create the pending review (first API call to create review with comments) but **skip the second API call** to `/reviews/<REVIEW_ID>/events`. This leaves the review in PENDING state — the comments exist as a draft that the user can later submit manually from the GitHub UI. This is useful when the reviewer wants to add their own comments or adjust the review before finalizing it.
 
 ## Understanding Position vs Line Number
 
@@ -1229,7 +1232,7 @@ gh api repos/:owner/:repo/pulls/123/reviews \
   -f 'comments[][body]=Token validation is missing...' \
   --jq '{id, state}'
 
-# Submit with appropriate event type
+# Submit with appropriate event type (SKIP this step if user chose "Post as pending")
 gh api repos/:owner/:repo/pulls/123/reviews/<REVIEW_ID>/events \
   -X POST \
   -H "Accept: application/vnd.github+json" \
@@ -1237,6 +1240,8 @@ gh api repos/:owner/:repo/pulls/123/reviews/<REVIEW_ID>/events \
   -f event="REQUEST_CHANGES" \
   -f body="Found 2 issues that need to be addressed before merging."
 ```
+
+**If user chose "Post as pending":** Stop after the first API call (creating the review with comments). Do NOT call the `/events` endpoint. Tell the user: "Review created as pending with {N} comments. You can view and submit it from the GitHub PR page."
 
 ## Error Handling Guide
 
