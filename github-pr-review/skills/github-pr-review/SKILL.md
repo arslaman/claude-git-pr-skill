@@ -363,6 +363,8 @@ Options:
 
 **Behavior for "Post as pending":** When the user selects this option, create the pending review (first API call to create review with comments) but **skip the second API call** to `/reviews/<REVIEW_ID>/events`. This leaves the review in PENDING state — the comments exist as a draft that the user can later submit manually from the GitHub UI. This is useful when the reviewer wants to add their own comments or adjust the review before finalizing it.
 
+**CRITICAL — Ambiguous or empty AskUserQuestion response:** If the AskUserQuestion result does not contain a clear, unambiguous selection (e.g., the answer field is blank, empty, or cannot be matched to one of the three options above), **default to "Post as pending"** — create the pending review with comments but do NOT submit/finalize it (skip the events API call). Never treat an unclear response as approval to post a finalized review. Inform the user: "I didn't receive a clear confirmation, so I created the review as pending. You can submit it from the GitHub PR page or ask me to submit it now."
+
 ## Understanding Position vs Line Number
 
 **CRITICAL:** GitHub's review API uses `position` NOT `line` number. Using incorrect positions causes HTTP 422 errors.
@@ -1152,8 +1154,9 @@ Stop if you're thinking:
 - **"I'll mix `-f` and `-F` flags, it doesn't matter"**
 - **"I'll include `event` in my JSON and also call the events API"**
 - **"The JSON payload with `event` creates a pending review"**
+- **"The AskUserQuestion response was blank/empty, the user probably meant yes"**
 
-**All of these mean: STOP. Check gh first, get diff, calculate correct positions, validate all parameters, get explicit approval, then use pending review.**
+**All of these mean: STOP. Check gh first, get diff, calculate correct positions, validate all parameters, get explicit approval, then use pending review. If approval is ambiguous, default to pending — never to posting.**
 
 **Why pending reviews?** Take the same time (2 API calls vs 1) but provide critical benefits:
 - Can review your own comments before submitting

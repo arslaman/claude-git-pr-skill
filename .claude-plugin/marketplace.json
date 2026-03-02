@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Professional GitHub PR review skills for Claude Code",
-    "version": "2.2.0"
+    "version": "2.2.1"
   },
   "plugins": [
     {
       "name": "github-pr-review",
       "source": "./github-pr-review",
       "description": "Professional GitHub PR reviews with position validation, JSON payload support, code suggestions, multi-agent parallel review, and user approval workflow",
-      "version": "2.2.0",
+      "version": "2.2.1",
       "author": {
         "name": "Aidan Kinzett"
       },

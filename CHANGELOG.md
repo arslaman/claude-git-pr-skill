@@ -242,6 +242,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Documentation emphasis** - JSON payload approach now documented as PRIMARY method
 - **Error messages** - More detailed error messages for position validation failures
 
+## [2.2.1] - 2026-03-02
+
+### Fixed
+- **Ambiguous approval defaults to finalized review** - When AskUserQuestion returns a blank or unrecognizable response, the skill now defaults to "Post as pending" (no event) instead of treating it as approval to post a finalized review
+- **Added red flag** - New entry warning against interpreting empty/blank approval responses as "yes"
+
+### Changed
+- **Approval Pattern section** - Added explicit "CRITICAL — Ambiguous or empty AskUserQuestion response" paragraph with default-to-pending behavior and user notification message
+- **Red Flags section** - Added new red flag for blank approval responses; updated summary line to emphasize "if approval is ambiguous, default to pending"
+
 ## [Unreleased]
 
 ### Planned
