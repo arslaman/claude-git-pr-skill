@@ -18,7 +18,7 @@ Install directly from the marketplace using Claude Code:
 
 ```bash
 # Add this marketplace
-/plugin marketplace add aidankinzett/claude-git-pr-skill
+/plugin marketplace add arslaman/claude-git-pr-skill
 
 # Install the plugin
 /plugin install github-pr-review
@@ -36,7 +36,7 @@ Install directly from the marketplace using Claude Code:
       "name": "github-pr-skills",
       "source": {
         "source": "github",
-        "repo": "aidankinzett/claude-git-pr-skill"
+        "repo": "arslaman/claude-git-pr-skill"
       }
     }
   ],
@@ -159,7 +159,7 @@ CHANGELOG.md                # Version history and changes
 ## Versioning
 
 This skill follows [Semantic Versioning](https://semver.org/):
-- **Current version:** 1.0.0
+- **Current version:** 2.2.1
 - **Version location:** `.claude-plugin/marketplace.json`
 - **Change history:** See [CHANGELOG.md](CHANGELOG.md)
 
