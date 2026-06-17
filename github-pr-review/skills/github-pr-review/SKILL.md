@@ -66,6 +66,8 @@ if (any P0 or P1 findings exist) {
 7. **Get explicit approval** - Use AskUserQuestion
 8. **Post the review** - Single-call with appropriate event type
 
+> **Orchestrator discipline:** In multi-agent mode the main thread does NOT review the code itself. Steps 1–2 gather only what's needed to launch the agents (PR metadata, the diff, the commit SHA). Do not read source files, trace types, or verify suspected bugs inline before fanning out — that is the agents' job, and doing it first duplicates their work and defeats the parallelism. Resume hands-on work at Step 4, consolidating what the agents return.
+
 ### Agent Output Format
 
 Each agent produces structured findings:
