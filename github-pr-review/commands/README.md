@@ -32,12 +32,20 @@ rm .git/hooks/pre-commit
 
 ### calculate-position.sh
 
-Calculate position numbers in the diff for a given file. This helps you find the correct position values to use in your review comments.
+Show the diff for a file with **both** the file line number and the legacy diff
+position, so you can anchor comments correctly.
+
+Prefer the `line` column: pass it as `line` (with `side`, which defaults to
+`RIGHT`) and let GitHub compute the position itself. The `pos` column exists only
+for the legacy `position` field.
 
 **Usage:**
 ```bash
-./commands/calculate-position.sh <pr_number> <file_path>
+./commands/calculate-position.sh <pr_number> <file_path> [owner/repo]
 ```
+
+The repo defaults to the current directory's; pass `owner/repo` (or set `GH_REPO`)
+when running from outside the target checkout.
 
 **Example:**
 ```bash
@@ -222,11 +230,19 @@ State: COMMENTED
 
 ### validate-review.sh
 
-Validate a review JSON file before posting it. This catches common errors like missing fields, invalid positions, or files not in the diff.
+Validate a review JSON file before posting it. Checks that every comment has a
+`path`, a `body`, and exactly one anchor (`line` preferred, or legacy `position`),
+and that every path is actually in the PR diff.
+
+Requires `jq`; if it is missing the command exits with a clear message and a manual
+checklist rather than failing part-way through.
+
+It validates the *payload*, not where comments land - always verify anchoring after
+posting (see SKILL.md: Verify Anchoring After Posting).
 
 **Usage:**
 ```bash
-./commands/validate-review.sh <pr_number> <json_file>
+./commands/validate-review.sh <pr_number> <json_file> [owner/repo]
 ```
 
 **Example:**
