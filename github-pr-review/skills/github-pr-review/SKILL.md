@@ -203,7 +203,8 @@ cat > /tmp/review.json <<'EOF'
   "comments": [
     {
       "path": "src/file.ts",
-      "position": 13,
+      "line": 13,
+      "side": "RIGHT",
       "body": "Fix the import:\n\n```suggestion\nimport { foo } from './bar';\n```"
     }
   ]
@@ -328,20 +329,22 @@ gh auth login
 2. **Get PR details** - Fetch PR number and commit SHA
 3. **Launch 5 agents in parallel** - Run `multi-agent-review.sh` orchestrator
 4. **Consolidate findings** - Script merges results by severity
-5. **Calculate positions** - Use helper commands for accuracy
+5. **Resolve target lines** - Use `line` + `side` from the diff (no hand-counting)
 6. **Show user consolidated review** - Present findings by severity level
 7. **Get explicit approval** - Use AskUserQuestion with yes/no/pending options
 8. **Post the review** - Single-call with appropriate event type, OR create as pending if user chose "Post as pending" (skip the events API call)
+9. **Verify anchoring** - Confirm each comment landed on its intended line BEFORE reporting success (see Verify Anchoring After Posting)
 
 ### Manual Workflow (v1.x) - For Quick/Focused Reviews
 
 1. **Check gh CLI is installed** - Run `gh --version` to verify
-2. **Get PR diff** - Fetch diff to calculate correct positions
-3. **Draft the review** - Analyze PR and prepare all comments with valid positions
+2. **Get PR diff** - Fetch the diff to identify target lines
+3. **Draft the review** - Analyze PR and prepare all comments with `line` + `side`
 4. **Validate all parameters** - Ensure no null/empty values
 5. **Show user exactly what will be posted** - Use AskUserQuestion with yes/no/pending options
 6. **Get explicit approval** - Wait for user confirmation
 7. **Post the review** - Only after approval, OR create as pending if user chose "Post as pending"
+8. **Verify anchoring** - Confirm each comment landed on its intended line BEFORE reporting success (see Verify Anchoring After Posting)
 
 ### Approval Pattern
 
@@ -365,16 +368,45 @@ Options:
 
 **CRITICAL — Ambiguous or empty AskUserQuestion response:** If the AskUserQuestion result does not contain a clear, unambiguous selection (e.g., the answer field is blank, empty, or cannot be matched to one of the three options above), **default to "Post as pending"** — create the pending review with comments but do NOT submit/finalize it (skip the events API call). Never treat an unclear response as approval to post a finalized review. Inform the user: "I didn't receive a clear confirmation, so I created the review as pending. You can submit it from the GitHub PR page or ask me to submit it now."
 
-## Understanding Position vs Line Number
+## Anchoring Comments: Use `line`, Not `position`
 
-**CRITICAL:** GitHub's review API uses `position` NOT `line` number. Using incorrect positions causes HTTP 422 errors.
+**Anchor every comment with `line` + `side`. This is the default, and it is what keeps comments on the line you meant.**
 
-### What is Position?
+`comments[]` on `POST /repos/{owner}/{repo}/pulls/{n}/reviews` accepts `line` — the
+real line number in the file, exactly as shown in the diff — together with `side`
+(`RIGHT` for the post-change file, `LEFT` for pre-change). `side` defaults to
+`RIGHT`, so it is optional for ordinary comments on added code. GitHub derives the diff
+position server-side, so there is nothing to hand-count and no off-by-one to get
+wrong. This works on pending (unsubmitted) reviews too.
 
-- **Position** = The line number within the diff hunk, starting from the first `@@` line
-- The line just below the `@@` hunk header is position 1
-- Position continues through all hunks in the file until a new file begins
-- **Position is NOT the same as line number in the file**
+```json
+{
+  "path": "src/file.ts",
+  "line": 42,
+  "side": "RIGHT",
+  "body": "Comment text"
+}
+```
+
+Add `start_line` and `start_side` for a multi-line comment.
+
+`position` is the legacy alternative. It still works, but it requires counting lines
+in the raw patch by hand — an easy and **silent** way to anchor every comment one
+line off. That is not cosmetic: a mis-anchored ` ```suggestion ` block rewrites the
+wrong line, so applying it produces broken code. Reach for `position` only when
+`line` is genuinely unavailable.
+
+### Legacy: what is Position?
+
+- **Position 1 is the first line AFTER the `@@` hunk header.** The header itself is
+  not a position.
+- Every line after that counts: added (`+`), removed (`-`), context (space), blank.
+- Position keeps counting across all hunks in the same file. Each *subsequent* `@@`
+  header consumes one position; the first one does not.
+- **Position is NOT the line number in the file.**
+
+Concretely, with `lines = patch.split("\n")` where `lines[0]` is the first `@@`
+header, the line that a given position anchors to is `lines[position]`.
 
 ### Step-by-Step: How to Calculate Position
 
@@ -432,7 +464,7 @@ index 1234567..abcdefg 100644
 +++ b/src/components/Button.tsx
 @@ -15,6 +15,7 @@ import { useState } from 'react';
  export function Button({ label }: { label: string }) {
-+  const [loading, setLoading] = useState(false);  // Position 1
++  const [loading, setLoading] = useState(false);  // line 16 -> position 2
    return <button>{label}</button>;
  }
 ```
@@ -494,21 +526,24 @@ diff --git a/src/auth.ts b/src/auth.ts
 --- a/src/auth.ts
 +++ b/src/auth.ts
 @@ -20,9 +20,13 @@ export class AuthManager {
-   private token: string | null = null;
-
-+  validateToken() {              // Position 1
-+    if (!this.token) {           // Position 2
-+      throw new Error('No token'); // Position 3
-+    }                             // Position 4
-+  }                               // Position 5
-+
-   login() {                      // Position 6
-     this.token = 'abc';          // Position 7
-   }                              // Position 8
- }
+   private token: string | null = null;   // Position 1  <- context counts
+                                          // Position 2  <- blank counts
++  validateToken() {                      // Position 3
++    if (!this.token) {                   // Position 4
++      throw new Error('No token');       // Position 5
++    }                                    // Position 6
++  }                                      // Position 7
++                                         // Position 8
+   login() {                              // Position 9
+     this.token = 'abc';                  // Position 10
+   }                                      // Position 11
+ }                                        // Position 12
 ```
 
-If you want to comment on `throw new Error('No token');`, the position is **3**, not the line number (which might be 23).
+To comment on `throw new Error('No token');`: with `line` you pass its actual file
+line (23) and `side: "RIGHT"`. With legacy `position` you pass **5** — note the
+leading context line and the blank line occupy positions 1 and 2, which is exactly
+the kind of miscount that anchors a comment on the wrong line.
 
 ### Validation: Check Your Position
 
@@ -538,7 +573,7 @@ gh api repos/:owner/:repo/pulls/123/reviews/3779806918 \
   -X PUT \
   -f commit_id="..." \
   -f 'comments[][path]=...' \
-  -F 'comments[][position]=...'
+  -F 'comments[][line]=...'
 # Error: "comments", "commit_id" are not permitted keys
 ```
 
@@ -574,16 +609,48 @@ for comment in "${comments[@]}"; do
 done
 ```
 
+## Verify Anchoring After Posting
+
+**Required. Do this before telling the user the review is posted.**
+
+A wrong anchor produces no error — the API returns 200 and the comment simply sits
+on the wrong line. The only way to catch it is to look:
+
+```bash
+gh api repos/OWNER/REPO/pulls/<PR_NUMBER>/reviews/<REVIEW_ID>/comments \
+  --jq '.[] | "\(.path)  line=\(.line)  pos=\(.position)\n   -> \(.diff_hunk | split("\n") | last)"'
+```
+
+The last line of each `diff_hunk` is the line the comment is attached to. Compare it
+against what you intended, comment by comment.
+
+Two things to know about pending (unsubmitted) reviews:
+
+- Their comments return `line: null` until the review is submitted, so `diff_hunk`
+  is the only anchoring check that works on a draft. `position` is populated — and
+  if you posted with `line`, the `position` GitHub echoes back is its own
+  calculation, which is a useful cross-check.
+- Use `pulls/<PR_NUMBER>/reviews/<REVIEW_ID>/comments`, not `pulls/<PR_NUMBER>/comments` —
+  the latter omits unsubmitted comments.
+
+If anything is mis-anchored, a pending review is cheap to repair — delete it and
+repost rather than trying to patch it:
+
+```bash
+gh api repos/OWNER/REPO/pulls/<PR_NUMBER>/reviews/<REVIEW_ID> -X DELETE
+```
+
 ## Validation Checklist
 
 Before posting any review, verify:
 
 - [ ] `commit_id` is set to the latest commit SHA
 - [ ] All `comments[][path]` values are non-empty strings
-- [ ] All `comments[][position]` values are positive integers
+- [ ] All `comments[][line]` values are positive integers naming a line in the diff
+- [ ] `side` is correct (defaults to `RIGHT`; set `LEFT` only for the pre-change file)
 - [ ] All `comments[][body]` values are non-empty strings
-- [ ] Positions are calculated from diff hunks, not line numbers
-- [ ] No `side` parameter is included (not valid for draft reviews)
+- [ ] If using legacy `position`, each was checked as `lines[position]` in the patch
+- [ ] Anchoring was verified after posting (see Verify Anchoring After Posting)
 - [ ] API headers are included: `Accept` and `X-GitHub-Api-Version`
 
 ### Error Reference
@@ -593,7 +660,7 @@ Before posting any review, verify:
 | `Expected value to not be null` (position) | Missing or invalid position | Calculate position from diff hunk |
 | `Expected value to not be null` (path) | Empty or null path value | Ensure all comments have valid file paths |
 | `Expected value to not be null` (body) | Empty or null comment body | Ensure all comments have non-empty text |
-| `Field is not defined on DraftPullRequestReviewComment` (side) | Using invalid `side` parameter | Remove `side` from all comments |
+| Comments anchored one line off (silent - no error) | Hand-counted `position`, counting the `@@` header as position 1 | Use `line` + `side` and let GitHub compute the position |
 | `"comments", "commit_id" are not permitted keys` | Trying to update pending review | Delete and recreate, or use individual comments |
 | `"13" is not a number` (position) | Using `--raw-field` for position value | Use `-F` flag instead of `--raw-field` for numeric values |
 | Position values null for some indices | Mixing `-f` and `-F` flags for array params | Use JSON payload approach for multiple comments |
@@ -641,7 +708,7 @@ gh api repos/:owner/:repo/pulls/6/reviews \
   -H "X-GitHub-Api-Version: 2022-11-28" \
   -f commit_id="abc123" \
   -f 'comments[][path]=file.ts' \
-  -F 'comments[][position]=13' \
+  -F 'comments[][line]=13' \
   -F 'comments[][body]@/tmp/comment_body.txt'
 ```
 
@@ -655,7 +722,8 @@ cat > /tmp/review.json <<'EOF'
   "comments": [
     {
       "path": "file.ts",
-      "position": 13,
+      "line": 13,
+      "side": "RIGHT",
       "body": "Fix the import path:\n\n```suggestion\nimport pondokIndahImage from \"~/assets/images/hotels/pondok-indah.jpg\"\n```\n\nThe path was incorrect."
     }
   ]
@@ -679,14 +747,14 @@ gh api repos/:owner/:repo/pulls/6/reviews \
 **❌ WRONG:**
 ```bash
 gh api repos/:owner/:repo/pulls/123/reviews \
-  --raw-field 'comments[][position]=13'
+  --raw-field 'comments[][line]=13'
 # Error: "13" is not a number
 ```
 
 **✅ CORRECT:**
 ```bash
 gh api repos/:owner/:repo/pulls/123/reviews \
-  -F 'comments[][position]=13'
+  -F 'comments[][line]=13'
 # -F sends the value as a number, not a string
 ```
 
@@ -698,7 +766,7 @@ gh api repos/:owner/:repo/pulls/123/reviews \
 ```bash
 gh api repos/:owner/:repo/pulls/123/reviews \
   -f 'comments[][path]=file.ts' \      # -f for string
-  -F 'comments[][position]=13' \       # -F for number
+  -F 'comments[][line]=13' \       # -F for number
   -f 'comments[][body]=comment...'     # -f for string
 # Error: Some indices get null values
 ```
@@ -801,17 +869,20 @@ cat <<'EOF' > /tmp/review_comments.json
   "comments": [
     {
       "path": "app/components/providers/details-page.tsx",
-      "position": 13,
+      "line": 13,
+      "side": "RIGHT",
       "body": "Missing error handling here..."
     },
     {
       "path": "app/components/providers/details-page.tsx",
-      "position": 14,
+      "line": 14,
+      "side": "RIGHT",
       "body": "Consider adding loading state"
     },
     {
       "path": "src/auth.ts",
-      "position": 5,
+      "line": 5,
+      "side": "RIGHT",
       "body": "Token validation is missing..."
     }
   ]
@@ -847,7 +918,8 @@ cat <<'EOF' > /tmp/review_comments.json
   "comments": [
     {
       "path": "app/components/providers/details-page.tsx",
-      "position": 13,
+      "line": 13,
+      "side": "RIGHT",
       "body": "Missing error handling here..."
     }
   ]
@@ -948,7 +1020,7 @@ gh api repos/:owner/:repo/pulls/123/reviews \
   -H "X-GitHub-Api-Version: 2022-11-28" \
   -f commit_id="abc123" \
   -f 'comments[][path]=file.ts' \
-  -F 'comments[][position]=15' \
+  -F 'comments[][line]=15' \
   -f 'comments[][body]=Single comment here'
 ```
 
@@ -963,7 +1035,7 @@ gh api repos/:owner/:repo/pulls/123/reviews \
   -f event="COMMENT" \
   -f body="Overall message" \
   -f 'comments[][path]=file.ts' \
-  -F 'comments[][position]=15' \
+  -F 'comments[][line]=15' \
   -f 'comments[][body]=Single comment here'
 ```
 
@@ -991,7 +1063,7 @@ gh api repos/:owner/:repo/pulls/$PR_NUMBER/reviews \
   -H "X-GitHub-Api-Version: 2022-11-28" \
   -f commit_id="$COMMIT_SHA" \
   -f 'comments[][path]=path/to/file.ts' \
-  -F 'comments[][position]=15' \
+  -F 'comments[][line]=15' \
   -f 'comments[][body]=Comment text
 
 ```suggestion
@@ -1044,13 +1116,14 @@ gh repo view --json owner,name
 
 - `commit_id`: Latest commit SHA from the PR
 - `comments[][path]`: File path relative to repo root (must be non-empty)
-- `comments[][position]`: Position in diff (calculated from `@@` hunk headers, must be positive integer)
+- `comments[][line]`: Line number in the file being commented on (positive integer)
+- `comments[][side]`: `RIGHT` (default) for the post-change file, `LEFT` for pre-change
 - `comments[][body]`: Comment text with optional ```suggestion block (must be non-empty)
 
 ### Optional Parameters
 
-- `comments[][start_side]`: For multi-line code suggestions (use `LEFT` or `RIGHT`)
-- `comments[][start_position]`: For multi-line code suggestions (use `-F`)
+- `comments[][start_line]` / `comments[][start_side]`: For multi-line comments
+- `comments[][position]`: Legacy alternative to `line`/`side` - see Anchoring Comments
 - `event`: Omit for PENDING, or use `COMMENT`/`APPROVE`/`REQUEST_CHANGES`
 
 ### Syntax Rules
@@ -1058,10 +1131,11 @@ gh repo view --json owner,name
 ✅ **DO:**
 - Use single quotes around parameters with `[]`: `'comments[][path]'`
 - Use `-f` for string values (path, body)
-- Use `-F` for numeric values (positions) - NOT `--raw-field`
+- Use `-F` for numeric values (`line`, `position`) - NOT `--raw-field`
 - Include API headers: `-H "Accept: application/vnd.github+json"` and `-H "X-GitHub-Api-Version: 2022-11-28"`
 - Use triple backticks with `suggestion` identifier for code suggestions
-- Calculate position from diff hunks, not line numbers
+- Anchor comments with `line` + `side` and let GitHub compute the position
+- Verify where comments actually landed before reporting success
 - Validate all parameters before posting
 - **Use JSON payload approach for multiple comments** (see above)
 
@@ -1069,10 +1143,10 @@ gh repo view --json owner,name
 - Use double quotes around `comments[][]` parameters
 - Use `--raw-field` for position values - sends as string instead of number
 - Mix `-f` and `-F` flags for the same array parameter - causes parsing issues
-- Use `line` instead of `position` - this will cause HTTP 422 errors
-- Use `side` parameter - this is NOT valid for draft reviews
+- Hand-count `position` when `line` would do - that is how comments end up one line off
+- Report a review as posted without checking where its comments landed
 - Forget to get commit SHA first
-- Leave any `body`, `path`, or `position` values null/empty
+- Leave any `body`, `path`, or `line` values null/empty
 - Try to update a pending review with new comments
 
 ## Code Suggestions Format
@@ -1146,17 +1220,17 @@ Stop if you're thinking:
 - **"The approval step slows things down"**
 - **"I'll check for gh later, let me draft the review first"**
 - **"gh is probably installed, no need to check"**
-- **"I'll use `line` instead of `position` for simplicity"**
-- **"I'll add `side=RIGHT` to be safe"**
 - **"I can update the pending review later with more comments"**
 - **"Position is close enough to line number, I'll estimate"**
+- **"I'll hand-count the position, it's only a few lines"**
+- **"The comments are posted - no need to check where they landed"**
 - **"I'll use `--raw-field` for position - it should work the same"**
 - **"I'll mix `-f` and `-F` flags, it doesn't matter"**
 - **"I'll include `event` in my JSON and also call the events API"**
 - **"The JSON payload with `event` creates a pending review"**
 - **"The AskUserQuestion response was blank/empty, the user probably meant yes"**
 
-**All of these mean: STOP. Check gh first, get diff, calculate correct positions, validate all parameters, get explicit approval, then use pending review. If approval is ambiguous, default to pending — never to posting.**
+**All of these mean: STOP. Check gh first, get the diff, anchor with `line`/`side`, validate all parameters, get explicit approval, use a pending review, then verify anchoring before reporting success. If approval is ambiguous, default to pending — never to posting.**
 
 **Why pending reviews?** Take the same time (2 API calls vs 1) but provide critical benefits:
 - Can review your own comments before submitting
@@ -1228,10 +1302,10 @@ gh api repos/:owner/:repo/pulls/123/reviews \
   -H "X-GitHub-Api-Version: 2022-11-28" \
   -f commit_id="$COMMIT_SHA" \
   -f 'comments[][path]=src/components/Button.tsx' \
-  -F 'comments[][position]=1' \
+  -F 'comments[][line]=1' \
   -f 'comments[][body]=Missing loading state...' \
   -f 'comments[][path]=src/auth.ts' \
-  -F 'comments[][position]=5' \
+  -F 'comments[][line]=5' \
   -f 'comments[][body]=Token validation is missing...' \
   --jq '{id, state}'
 
